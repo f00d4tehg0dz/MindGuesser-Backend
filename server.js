@@ -12,7 +12,7 @@ const configuration = new Configuration({
 const app = express();
 app.use(
   cors({
-    origin: "https://www.mindguesser.com",
+    origin: ["https://mindguesser.com", "https://www.mindguesser.com"],
   })
 );
 app.use(express.json());
