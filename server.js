@@ -11,7 +11,11 @@ const configuration = new Configuration({
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(
+  cors({
+    origin: "https://www.mindguesser.com",
+  })
+);
 
 // Initialize the SQLite database
 const db = new sqlite3.Database(':memory:');
