@@ -1,7 +1,7 @@
 const express = require('express');
 const { Configuration, OpenAIApi } = require("openai");
 const dotenv = require('dotenv');
-const { MongoClient } = require('mongodb');
+const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 
 dotenv.config();
@@ -17,43 +17,50 @@ app.use(
 );
 app.use(express.json());
 
-const uri = process.env.MONGODB_URI;
-const client = new MongoClient(uri, { useUnifiedTopology: true });
+// Initialize the SQLite database
+const db = new sqlite3.Database(':memory:');
 
 const openai = new OpenAIApi(configuration);
 
-async function getDatabase() {
-  await client.connect();
-  return client.db('mindguesser');
-}
+db.serialize(() => {
+  db.run('CREATE TABLE conversations (id TEXT, role TEXT, content TEXT)');
+});
 
-async function getConversationCollection() {
-  const db = await getDatabase();
-  return db.collection('conversations');
-}
 
-async function getConversationHistory(conversationId) {
-  const collection = await getConversationCollection();
-  return collection.find({ id: conversationId }).toArray();
-}
+function generatePrompt(conversationId, userMessage) {
+  return new Promise(async (resolve) => {
+    const conversationHistory = await getConversationHistory(conversationId);
+    conversationHistory.push({ role: 'user', content: userMessage });
 
-async function saveMessage(conversationId, role, content) {
-  const collection = await getConversationCollection();
-  collection.insertOne({ id: conversationId, role, content });
-}
+    let prompt = 'You are an AI-powered guessing game similar to Akinator. Your goal is to guess the character, object, or animal based on the user\'s answers to your questions.\n\n';
 
-async function generatePrompt(conversationId, userMessage) {
-  const conversationHistory = await getConversationHistory(conversationId);
-  conversationHistory.push({ role: 'user', content: userMessage });
+    conversationHistory.forEach((message) => {
+      prompt += `${message.role === 'user' ? 'User' : 'AI'}: ${message.content}\n`;
+    });
 
-  let prompt = 'You are an AI-powered guessing game similar to Akinator. Your goal is to guess the character, object, or animal based on the user\'s answers to your questions.\n\n';
-
-  conversationHistory.forEach((message) => {
-    prompt += `${message.role === 'user' ? 'User' : 'AI'}: ${message.content}\n`;
+    resolve(prompt);
   });
-
-  return prompt;
 }
+
+function getConversationHistory(conversationId) {
+  return new Promise((resolve) => {
+    db.all('SELECT * FROM conversations WHERE id = ?', conversationId, (err, rows) => {
+      if (err) {
+        console.error(err);
+        resolve([]);
+      } else {
+        resolve(rows.map(row => ({ role: row.role, content: row.content })));
+      }
+    });
+  });
+}
+
+function saveMessage(conversationId, role, content) {
+  db.run('INSERT INTO conversations (id, role, content) VALUES (?, ?, ?)', [conversationId, role, content], (err) => {
+    if (err) console.error(err);
+  });
+}
+
 
 app.post('/continue-conversation', async (req, res) => {
   try {
@@ -67,21 +74,22 @@ app.post('/continue-conversation', async (req, res) => {
 
     const prompt = await generatePrompt(conversationId, userInput);
 
-    const conversationHistory = await getConversationHistory(conversationId);
-    if (conversationHistory.length >= 20) {
-      const aiMessage = "You've stumped me, let's try again!";
-      saveMessage(conversationId, 'ai', aiMessage);
-      return res.status(200).json({ message: aiMessage });
-    }
+     // Check conversation history length
+     const conversationHistory = await getConversationHistory(conversationId);
+     if (conversationHistory.length >= 20) {
+       const aiMessage = "You've stumped me, let's try again!";
+       saveMessage(conversationId, 'ai', aiMessage);
+       return res.status(200).json({ message: aiMessage });
+     }
 
     const response = await openai.createChatCompletion({
       model: 'gpt-3.5-turbo',
-      messages: [{ role: "user", content: prompt }],
-      stop: ["You are"],
+      messages: [{ role: "user", content: prompt}],
+      stop: ["You are"]
     });
-
-    console.log(response.data);
-    const aiMessage = response.data.choices.map(choice => choice.message.content || '').join('').trim();
+     // Concatenate the content from each chunk
+     console.log(response.data)
+     const aiMessage = response.data.choices.map(choice => choice.message.content || '').join('').trim();
     saveMessage(conversationId, 'ai', aiMessage);
 
     res.status(200).json({ message: aiMessage });
