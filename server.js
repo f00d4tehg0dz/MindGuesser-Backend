@@ -23,7 +23,7 @@ const client = new MongoClient(uri, { useUnifiedTopology: true });
 const openai = new OpenAIApi(configuration);
 
 async function getDatabase() {
-  if (!client.isConnected()) await client.connect();
+  await client.connect();
   return client.db('mindguesser');
 }
 
