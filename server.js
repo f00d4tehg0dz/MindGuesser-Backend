@@ -1,8 +1,9 @@
-const express = require('express');
+const express = require("express");
 const { Configuration, OpenAIApi } = require("openai");
-const dotenv = require('dotenv');
-const { MongoClient } = require('mongodb');
-const cors = require('cors');
+const dotenv = require("dotenv");
+const { MongoClient } = require("mongodb");
+const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 
 dotenv.config();
 const configuration = new Configuration({
@@ -10,28 +11,29 @@ const configuration = new Configuration({
 });
 
 const app = express();
+app.set("trust proxy", 1); // Trust the first proxy
+
 app.use(
   cors({
-    origin: ["https://mindguesser.com", "https://www.mindguesser.com", "http://localhost:3555"],
-  })
+    origin: ["https://mindguesser.com", "https://www.mindguesser.com"],
+  }),
 );
 app.use(express.json());
 
 // Initialize the MongoDB database
 const uri = process.env.MONGODB_URI;
-
 const client = new MongoClient(uri, { useUnifiedTopology: true });
 
 const openai = new OpenAIApi(configuration);
 
 async function getDatabase() {
   await client.connect();
-  return client.db('mindguesser');
+  return client.db("mindguesser");
 }
 
 async function getConversationCollection() {
   const db = await getDatabase();
-  return db.collection('conversations');
+  return db.collection("conversations");
 }
 
 async function getConversationHistory(conversationId) {
@@ -41,55 +43,68 @@ async function getConversationHistory(conversationId) {
 
 async function saveMessage(conversationId, role, content) {
   const collection = await getConversationCollection();
-  collection.insertOne({ id: conversationId, role, content });
+  await collection.insertOne({ id: conversationId, role, content });
 }
 
 async function generatePrompt(conversationId, userMessage) {
   const conversationHistory = await getConversationHistory(conversationId);
-  conversationHistory.push({ role: 'user', content: userMessage });
+  conversationHistory.push({ role: "user", content: userMessage });
 
-  let prompt = 'You are an AI-powered guessing game similar to Akinator. Your goal is to guess the character, object, or animal based on the user\'s answers to your questions.\n\n';
+  let prompt =
+    "You are an AI-powered guessing game similar to Akinator. Your goal is to guess the character, object, or animal based on the user's answers to your questions.\n\n";
 
   conversationHistory.forEach((message) => {
-    prompt += `${message.role === 'user' ? 'User' : 'AI'}: ${message.content}\n`;
+    prompt += `${message.role === "user" ? "User" : "AI"}: ${message.content}\n`;
   });
 
   return prompt;
 }
 
-app.post('/continue-conversation', async (req, res) => {
+// Rate limiting middleware
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: "Too many requests from this IP, please try again after 15 minutes",
+});
+
+app.use(limiter);
+
+app.post("/continue-conversation", async (req, res) => {
   try {
     const { conversationId, userInput } = req.body;
 
     if (!conversationId) {
-      return res.status(400).json({ error: 'Conversation ID is required' });
+      return res.status(400).json({ error: "Conversation ID is required" });
     }
 
-    saveMessage(conversationId, 'user', userInput);
+    await saveMessage(conversationId, "user", userInput);
 
     const prompt = await generatePrompt(conversationId, userInput);
 
     const conversationHistory = await getConversationHistory(conversationId);
     if (conversationHistory.length >= 20) {
       const aiMessage = "You've stumped me, let's try again!";
-      saveMessage(conversationId, 'ai', aiMessage);
+      await saveMessage(conversationId, "ai", aiMessage);
       return res.status(200).json({ message: aiMessage });
     }
 
     const response = await openai.createChatCompletion({
-      model: 'gpt-3.5-turbo',
+      model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: prompt }],
       stop: ["You are"],
     });
 
-    console.log(response.data);
-    const aiMessage = response.data.choices.map(choice => choice.message.content || '').join('').trim();
-    saveMessage(conversationId, 'ai', aiMessage);
+    const aiMessage = response.data.choices[0].message.content.trim();
+
+    // Save AI response
+    await saveMessage(conversationId, "ai", aiMessage);
 
     res.status(200).json({ message: aiMessage });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'An error occurred while processing your request' });
+    res
+      .status(500)
+      .json({ error: "An error occurred while processing your request" });
   }
 });
 
