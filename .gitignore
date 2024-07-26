@@ -131,3 +131,4 @@ dist
 .history
 package-lock.json
 /.history
+yarn.lock

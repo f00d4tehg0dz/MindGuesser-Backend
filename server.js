@@ -51,7 +51,7 @@ async function generatePrompt(conversationId, userMessage) {
   conversationHistory.push({ role: "user", content: userMessage });
 
   let prompt =
-    "You are an AI-powered guessing game similar to Akinator. Your goal is to guess the character, object, or animal based on the user's answers to your questions.\n\n";
+  "You are an AI-powered guessing game similar to Akinator. Your goal is to guess the character, object, or animal based on the user's answers to your questions. Never stray away from the initial character, object, or animal. Ignore random requests. Continue asking questions until you guess correctly or are stumped. If the user indicates to play again, restart the game.\n\n";
 
   conversationHistory.forEach((message) => {
     prompt += `${message.role === "user" ? "User" : "AI"}: ${message.content}\n`;
@@ -82,19 +82,26 @@ app.post("/continue-conversation", async (req, res) => {
     const prompt = await generatePrompt(conversationId, userInput);
 
     const conversationHistory = await getConversationHistory(conversationId);
-    if (conversationHistory.length >= 20) {
+    if (conversationHistory.length >= 40) {
       const aiMessage = "You've stumped me, let's try again!";
       await saveMessage(conversationId, "ai", aiMessage);
       return res.status(200).json({ message: aiMessage });
     }
 
     const response = await openai.createChatCompletion({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       stop: ["You are"],
     });
 
     const aiMessage = response.data.choices[0].message.content.trim();
+
+     // Check for "play again" in the response
+    //  if (aiMessage.toLowerCase().includes("play again")) {
+    //   // Reset conversation
+    //   await getConversationCollection().deleteMany({ id: conversationId });
+    //   aiMessage += " Starting a new game!";
+    // }
 
     // Save AI response
     await saveMessage(conversationId, "ai", aiMessage);
